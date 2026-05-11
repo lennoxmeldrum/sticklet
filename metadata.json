@@ -1,0 +1,6 @@
+{
+  "name": "StickyBoard",
+  "description": "A collaborative padlet-style site where users can generate rooms and share sticky notes in real-time.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

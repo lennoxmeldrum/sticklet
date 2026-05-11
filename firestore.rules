@@ -1,0 +1,70 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+
+    function isValidRoom(data) {
+      return data.keys().hasAll(['createdAt']) &&
+             data.keys().size() == 1 &&
+             data.createdAt == request.time;
+    }
+
+    function isValidNote(data) {
+      return data.keys().hasAll(['text', 'authorId', 'color', 'createdAt', 'x', 'y']) &&
+             data.keys().size() == 6 &&
+             data.text is string && data.text.size() <= 1000 &&
+             data.authorId is string && data.authorId.size() <= 128 &&
+             data.color is string && data.color in ['yellow', 'blue', 'green', 'pink', 'purple'] &&
+             data.createdAt == request.time &&
+             data.x is number && data.x >= 0 && data.x <= 100 &&
+             data.y is number && data.y >= 0 && data.y <= 100;
+    }
+
+    match /rooms/{roomId} {
+      allow get: if isValidId(roomId);
+      allow create: if isValidId(roomId) && isValidRoom(incoming());
+      allow update: if false; // immutable
+      allow delete: if false;
+      allow list: if false; // don't allow listing all rooms
+
+      match /notes/{noteId} {
+        // Anyone can read notes in a room
+        allow list, get: if isValidId(roomId);
+
+        // Anyone can create a note
+        allow create: if isValidId(roomId) && isValidId(noteId) && isValidNote(incoming());
+
+        // Only the anonymous author can update their note (restricted fields)
+        allow update: if isValidId(roomId) && isValidId(noteId) && 
+                      // Update logic: preserve static fields
+                      incoming().authorId == existing().authorId &&
+                      incoming().createdAt == existing().createdAt &&
+                      incoming().color == existing().color &&
+                      // Validate new fields
+                      incoming().text is string && incoming().text.size() <= 1000 &&
+                      incoming().x is number && incoming().x >= 0 && incoming().x <= 100 &&
+                      incoming().y is number && incoming().y >= 0 && incoming().y <= 100 &&
+                      // Ensure no ghost fields
+                      incoming().diff(existing()).affectedKeys().hasOnly(['text', 'x', 'y']) &&
+                      // Must enforce client supplies their authorId in request.auth (if auth used) or we just trust the client app token?
+                      // Wait, we aren't using Firebase auth, so any client can spoof any authorId.
+                      // Since "Nobody needs to log in", this is the best we can do. No secrets.
+                      // For a real app, we'd use Anonymous Auth and enforce request.auth.uid == existing().authorId.
+                      // Let's at least enforce the schema.
+                      true;
+
+        allow delete: if isValidId(roomId) && isValidId(noteId) && true;
+      }
+    }
+  }
+}

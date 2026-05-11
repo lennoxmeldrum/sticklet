@@ -1,0 +1,37 @@
+{
+  "entities": {
+    "Room": {
+      "title": "Room",
+      "description": "A collaborative room",
+      "type": "object",
+      "properties": {
+        "createdAt": { "type": "timestamp", "description": "Timestamp created" }
+      },
+      "required": ["createdAt"]
+    },
+    "Note": {
+      "title": "Note",
+      "description": "A sticky note in a room",
+      "type": "object",
+      "properties": {
+        "text": { "type": "string", "maxLength": 1000 },
+        "authorId": { "type": "string", "maxLength": 128 },
+        "color": { "type": "string", "enum": ["yellow", "blue", "green", "pink", "purple"] },
+        "createdAt": { "type": "timestamp" },
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      },
+      "required": ["text", "authorId", "color", "createdAt", "x", "y"]
+    }
+  },
+  "firestore": {
+    "rooms/{roomId}": {
+      "schema": { "$ref": "#/entities/Room" },
+      "description": "Rooms containing sticky notes"
+    },
+    "rooms/{roomId}/notes/{noteId}": {
+      "schema": { "$ref": "#/entities/Note" },
+      "description": "Notes inside a room"
+    }
+  }
+}
