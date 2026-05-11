@@ -2,14 +2,11 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if false;
-    }
 
+    // ---------- helpers (used by sticklet rooms/notes) ----------
     function isValidId(id) {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
-
     function incoming() { return request.resource.data; }
     function existing() { return resource.data; }
 
@@ -30,41 +27,73 @@ service cloud.firestore {
              data.y is number && data.y >= 0 && data.y <= 100;
     }
 
+    // ---------- sticklet ----------
     match /rooms/{roomId} {
       allow get: if isValidId(roomId);
       allow create: if isValidId(roomId) && isValidRoom(incoming());
-      allow update: if false; // immutable
+      allow update: if false;
       allow delete: if false;
-      allow list: if false; // don't allow listing all rooms
+      allow list: if false;
 
       match /notes/{noteId} {
-        // Anyone can read notes in a room
         allow list, get: if isValidId(roomId);
-
-        // Anyone can create a note
         allow create: if isValidId(roomId) && isValidId(noteId) && isValidNote(incoming());
-
-        // Only the anonymous author can update their note (restricted fields)
-        allow update: if isValidId(roomId) && isValidId(noteId) && 
-                      // Update logic: preserve static fields
+        allow update: if isValidId(roomId) && isValidId(noteId) &&
                       incoming().authorId == existing().authorId &&
                       incoming().createdAt == existing().createdAt &&
                       incoming().color == existing().color &&
-                      // Validate new fields
                       incoming().text is string && incoming().text.size() <= 1000 &&
                       incoming().x is number && incoming().x >= 0 && incoming().x <= 100 &&
                       incoming().y is number && incoming().y >= 0 && incoming().y <= 100 &&
-                      // Ensure no ghost fields
-                      incoming().diff(existing()).affectedKeys().hasOnly(['text', 'x', 'y']) &&
-                      // Must enforce client supplies their authorId in request.auth (if auth used) or we just trust the client app token?
-                      // Wait, we aren't using Firebase auth, so any client can spoof any authorId.
-                      // Since "Nobody needs to log in", this is the best we can do. No secrets.
-                      // For a real app, we'd use Anonymous Auth and enforce request.auth.uid == existing().authorId.
-                      // Let's at least enforce the schema.
-                      true;
-
-        allow delete: if isValidId(roomId) && isValidId(noteId) && true;
+                      incoming().diff(existing()).affectedKeys().hasOnly(['text', 'x', 'y']);
+        allow delete: if isValidId(roomId) && isValidId(noteId);
       }
+    }
+
+    // ---------- existing collections (preserved from prior rules) ----------
+    match /boomers_campaigns/{document=**} {
+      allow read, write: if true;
+    }
+
+    // AP Review - Students collection (PIN auth) - server-side only writes
+    match /apr-students/{email} {
+      allow read, write: if false; // server-only via Admin SDK
+    }
+    // AP Review - Admins collection - server-only
+    match /apr-admins/{email} {
+      allow read, write: if false;
+    }
+    // AP Review - User data - owner only
+    match /apr-users/{userId}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /frqs/{document=**} {
+      allow read, write: if true;
+    }
+
+    match /credentials/{username} {
+      allow read: if true;
+      allow create: if true;
+      allow update, delete: if false;
+    }
+
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    match /astrophysics_progress/{document=**} {
+      allow read, write: if true;
+    }
+
+    // Cat blood sugar readings
+    match /catReadings/{readingId} {
+      allow read, write: if true;
+    }
+
+    // Meta collection for app flags
+    match /meta/{docId} {
+      allow read, write: if true;
     }
   }
 }
