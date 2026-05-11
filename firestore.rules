@@ -3,7 +3,19 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ---------- helpers (used by sticklet rooms/notes) ----------
+    // ---------- sticklet helpers ----------
+    function isSchoolUser() {
+      return request.auth != null
+        && request.auth.token.email is string
+        && request.auth.token.email.lower().matches('.*@ssis\\.edu\\.vn$')
+        && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isSchoolUser()
+        && request.auth.token.email.lower() == 'lmeldrum@ssis.edu.vn';
+    }
+
     function isValidId(id) {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
@@ -11,16 +23,21 @@ service cloud.firestore {
     function existing() { return resource.data; }
 
     function isValidRoom(data) {
-      return data.keys().hasAll(['createdAt']) &&
-             data.keys().size() == 1 &&
-             data.createdAt == request.time;
+      return data.keys().hasOnly(['createdAt', 'createdByUid', 'createdByEmail', 'createdByName']) &&
+             data.keys().hasAll(['createdAt', 'createdByUid', 'createdByEmail', 'createdByName']) &&
+             data.createdAt == request.time &&
+             data.createdByUid == request.auth.uid &&
+             data.createdByEmail == request.auth.token.email &&
+             data.createdByName is string && data.createdByName.size() <= 200;
     }
 
     function isValidNote(data) {
-      return data.keys().hasAll(['text', 'authorId', 'color', 'createdAt', 'x', 'y']) &&
-             data.keys().size() == 6 &&
+      return data.keys().hasOnly(['text', 'authorUid', 'authorEmail', 'authorName', 'color', 'createdAt', 'x', 'y']) &&
+             data.keys().hasAll(['text', 'authorUid', 'authorEmail', 'authorName', 'color', 'createdAt', 'x', 'y']) &&
              data.text is string && data.text.size() <= 1000 &&
-             data.authorId is string && data.authorId.size() <= 128 &&
+             data.authorUid == request.auth.uid &&
+             data.authorEmail == request.auth.token.email &&
+             data.authorName is string && data.authorName.size() <= 200 &&
              data.color is string && data.color in ['yellow', 'blue', 'green', 'pink', 'purple'] &&
              data.createdAt == request.time &&
              data.x is number && data.x >= 0 && data.x <= 100 &&
@@ -29,24 +46,32 @@ service cloud.firestore {
 
     // ---------- sticklet ----------
     match /rooms/{roomId} {
-      allow get: if isValidId(roomId);
-      allow create: if isValidId(roomId) && isValidRoom(incoming());
-      allow update: if false;
-      allow delete: if false;
-      allow list: if false;
+      allow get: if isSchoolUser() && isValidId(roomId);
+      allow list: if isAdmin();
+      allow create: if isSchoolUser() && isValidId(roomId) && isValidRoom(incoming());
+      allow update: if false; // rooms are immutable
+      allow delete: if isAdmin();
 
       match /notes/{noteId} {
-        allow list, get: if isValidId(roomId);
-        allow create: if isValidId(roomId) && isValidId(noteId) && isValidNote(incoming());
-        allow update: if isValidId(roomId) && isValidId(noteId) &&
-                      incoming().authorId == existing().authorId &&
+        allow list, get: if isSchoolUser() && isValidId(roomId);
+
+        allow create: if isSchoolUser() && isValidId(roomId) && isValidId(noteId) && isValidNote(incoming());
+
+        // Only the author can edit, and only text/x/y. Static fields preserved.
+        allow update: if isSchoolUser() &&
+                      existing().authorUid == request.auth.uid &&
+                      incoming().authorUid == existing().authorUid &&
+                      incoming().authorEmail == existing().authorEmail &&
+                      incoming().authorName == existing().authorName &&
                       incoming().createdAt == existing().createdAt &&
                       incoming().color == existing().color &&
                       incoming().text is string && incoming().text.size() <= 1000 &&
                       incoming().x is number && incoming().x >= 0 && incoming().x <= 100 &&
                       incoming().y is number && incoming().y >= 0 && incoming().y <= 100 &&
                       incoming().diff(existing()).affectedKeys().hasOnly(['text', 'x', 'y']);
-        allow delete: if isValidId(roomId) && isValidId(noteId);
+
+        // Authors can delete their own notes; admin can delete any.
+        allow delete: if isSchoolUser() && (existing().authorUid == request.auth.uid || isAdmin());
       }
     }
 
