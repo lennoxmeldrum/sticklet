@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { collection, doc, getDoc, onSnapshot, query, serverTimestamp, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase/config';
@@ -53,19 +53,27 @@ export default function Room() {
 
   const boardRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  const [boardHeight, setBoardHeight] = useState(0);
   const [originalHeight, setOriginalHeight] = useState(0);
   const [extraSlots, setExtraSlots] = useState(0);
 
-  useLayoutEffect(() => {
-    if (boardRef.current && originalHeight === 0) {
-      setOriginalHeight(boardRef.current.clientHeight);
-    }
-  }, [originalHeight]);
+  useEffect(() => {
+    if (!boardRef.current) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const h = entry.contentRect.height;
+        setBoardHeight(h);
+        setOriginalHeight((prev) => (prev === 0 && h > 0 ? h : prev));
+      }
+    });
+    ro.observe(boardRef.current);
+    return () => ro.disconnect();
+  }, []);
 
   const maxSlots = originalHeight > 0
     ? Math.floor((originalHeight * (MAX_HEIGHT_MULTIPLIER - 1)) / EXTEND_BY_PX)
     : 0;
-  const canvasHeight = originalHeight + extraSlots * EXTEND_BY_PX;
+  const canvasHeight = Math.max(boardHeight, originalHeight + extraSlots * EXTEND_BY_PX);
 
   // Auto-expand when any note sits in the bottom note-height band of the canvas.
   useEffect(() => {
@@ -240,42 +248,47 @@ export default function Room() {
       >
         <div
           ref={canvasRef}
-          className={cn("relative w-full h-full", isAddingMode ? "cursor-crosshair" : "")}
+          className={cn("relative w-full", isAddingMode ? "cursor-crosshair" : "")}
           style={{
-            minHeight: canvasHeight ? `${canvasHeight}px` : undefined,
+            height: canvasHeight ? `${canvasHeight}px` : '100%',
             backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)',
             backgroundSize: '24px 24px'
           }}
           onClick={handleCanvasClick}
         >
-          <AnimatePresence>
-            {notes.map(note => (
-              <StickyNote
-                key={note.id}
-                note={note}
-                roomId={roomId!}
-                canEdit={note.authorUid === user?.uid}
-                canDelete={note.authorUid === user?.uid || isAdmin}
-                canvasRef={canvasRef}
-              />
-            ))}
-            {draftNotes.map(draft => (
-              <StickyNote
-                key={draft.id}
-                note={draft}
-                roomId={roomId!}
-                canEdit={true}
-                canDelete={true}
-                isDraft={true}
-                onSaveDraft={handleSaveDraft}
-                onDiscardDraft={handleDiscardDraft}
-                canvasRef={canvasRef}
-              />
-            ))}
-          </AnimatePresence>
+          {canvasHeight > 0 && (
+            <AnimatePresence>
+              {notes.map(note => (
+                <StickyNote
+                  key={note.id}
+                  note={note}
+                  roomId={roomId!}
+                  canEdit={note.authorUid === user?.uid}
+                  canDelete={note.authorUid === user?.uid || isAdmin}
+                  canvasRef={canvasRef}
+                />
+              ))}
+              {draftNotes.map(draft => (
+                <StickyNote
+                  key={draft.id}
+                  note={draft}
+                  roomId={roomId!}
+                  canEdit={true}
+                  canDelete={true}
+                  isDraft={true}
+                  onSaveDraft={handleSaveDraft}
+                  onDiscardDraft={handleDiscardDraft}
+                  canvasRef={canvasRef}
+                />
+              ))}
+            </AnimatePresence>
+          )}
 
           {isAddingMode && (
-            <div className="sticky top-1/2 -translate-y-1/2 flex items-center justify-center pointer-events-none">
+            <div
+              className="fixed left-1/2 -translate-x-1/2 flex items-center justify-center pointer-events-none z-40"
+              style={{ top: 'calc(80px + 1rem)' }}
+            >
               <span className="bg-indigo-900/80 text-white px-6 py-3 rounded-full font-medium backdrop-blur-sm shadow-xl flex items-center gap-3">
                 <span className="w-3 h-3 rounded-full bg-indigo-400 animate-ping"></span>
                 Click anywhere to place a note
@@ -313,8 +326,9 @@ const StickyNote: React.FC<StickyNoteProps> = ({
   const [text, setText] = useState(note.text);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // Drag state: dragOffset is current pointer delta in pixels.
-  // optimisticPos is the just-released position in %, kept until Firestore syncs.
+  // Drag state: ref holds the latest delta (read by pointerup without closure staleness),
+  // state mirror triggers re-renders so the visual position follows the pointer.
+  const dragOffsetRef = useRef<{ dx: number; dy: number } | null>(null);
   const [dragOffset, setDragOffset] = useState<{ dx: number; dy: number } | null>(null);
   const [optimisticPos, setOptimisticPos] = useState<{ x: number; y: number } | null>(null);
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -346,34 +360,41 @@ const StickyNote: React.FC<StickyNoteProps> = ({
     if (e.button !== 0 && e.pointerType === 'mouse') return;
     e.currentTarget.setPointerCapture(e.pointerId);
     dragStartRef.current = { x: e.clientX, y: e.clientY };
+    dragOffsetRef.current = { dx: 0, dy: 0 };
     setDragOffset({ dx: 0, dy: 0 });
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!dragStartRef.current) return;
-    setDragOffset({
+    const next = {
       dx: e.clientX - dragStartRef.current.x,
       dy: e.clientY - dragStartRef.current.y,
-    });
+    };
+    dragOffsetRef.current = next;
+    setDragOffset(next);
   };
 
   const handlePointerUp = async (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragStartRef.current || !dragOffset) {
+    const offset = dragOffsetRef.current;
+    if (!dragStartRef.current || !offset) {
       dragStartRef.current = null;
+      dragOffsetRef.current = null;
       setDragOffset(null);
       return;
     }
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
 
-    const moved = Math.abs(dragOffset.dx) > 4 || Math.abs(dragOffset.dy) > 4;
-    const offset = dragOffset;
+    const moved = Math.abs(offset.dx) > 4 || Math.abs(offset.dy) > 4;
     dragStartRef.current = null;
+    dragOffsetRef.current = null;
     setDragOffset(null);
 
     if (!moved || !canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
-    const newX = Math.max(0, Math.min(100, effective.x + (offset.dx / rect.width) * 100));
-    const newY = Math.max(0, Math.min(100, effective.y + (offset.dy / rect.height) * 100));
+    const baseX = optimisticPos?.x ?? note.x;
+    const baseY = optimisticPos?.y ?? note.y;
+    const newX = Math.max(0, Math.min(100, baseX + (offset.dx / rect.width) * 100));
+    const newY = Math.max(0, Math.min(100, baseY + (offset.dy / rect.height) * 100));
     setOptimisticPos({ x: newX, y: newY });
 
     try {
