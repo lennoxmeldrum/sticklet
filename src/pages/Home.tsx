@@ -2,52 +2,31 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase/config';
-import { LogIn, Plus } from 'lucide-react';
-
-enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: null,
-      email: null,
-      emailVerified: null,
-      isAnonymous: true,
-      tenantId: null,
-      providerInfo: []
-    },
-    operationType,
-    path
-  };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
+import { useAuth } from '../auth/AuthContext';
+import { LogIn, LogOut, Plus, Shield } from 'lucide-react';
 
 export default function Home() {
   const [joinCode, setJoinCode] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
+  const { user, isAdmin, signOutUser } = useAuth();
 
   const handleCreateRoom = async () => {
+    if (!user) return;
     setIsLoading(true);
-    // Generate a simple 6-character alphanumeric code for room ID
     const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
-    
+
     try {
       await setDoc(doc(db, 'rooms', roomId), {
-        createdAt: serverTimestamp()
+        createdAt: serverTimestamp(),
+        createdByUid: user.uid,
+        createdByEmail: user.email,
+        createdByName: user.displayName ?? user.email,
       });
       navigate(`/room/${roomId}`);
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `rooms/${roomId}`);
+      console.error('Failed to create room', err);
+      alert('Failed to create room. See console for details.');
     } finally {
       setIsLoading(false);
     }
@@ -65,17 +44,24 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 selection:bg-indigo-100 selection:text-indigo-900">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
-        {/* Header Section */}
-        <div className="bg-indigo-600 px-8 py-10 text-center">
+        <div className="bg-indigo-600 px-8 py-10 text-center relative">
           <div className="mx-auto bg-indigo-500 w-16 h-16 rounded-2xl flex items-center justify-center rotate-3 mb-4 shadow-sm border border-indigo-400">
             <span className="text-3xl text-white font-bold tracking-tighter">Sb.</span>
           </div>
           <h1 className="text-3xl font-bold text-white tracking-tight">StickyBoard</h1>
-          <p className="text-indigo-200 mt-2 text-sm font-medium">Collaborate freely. No login required.</p>
+          <p className="text-indigo-200 mt-2 text-sm font-medium">
+            Signed in as <span className="font-semibold text-white">{user?.displayName ?? user?.email}</span>
+          </p>
+          <button
+            onClick={signOutUser}
+            className="absolute top-4 right-4 text-indigo-200 hover:text-white p-2 rounded-full hover:bg-indigo-500/40 transition-colors"
+            title="Sign out"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
 
         <div className="p-8 space-y-8">
-          {/* Create Room */}
           <div>
             <button
               onClick={handleCreateRoom}
@@ -96,7 +82,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Join Room */}
           <form onSubmit={handleJoinRoom} className="space-y-4">
             <div>
               <label htmlFor="code" className="block text-sm font-semibold text-slate-700 mb-1">
@@ -123,6 +108,16 @@ export default function Home() {
               Join Room
             </button>
           </form>
+
+          {isAdmin && (
+            <button
+              onClick={() => navigate('/admin')}
+              className="w-full flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white font-semibold py-3 px-6 rounded-xl transition-all"
+            >
+              <Shield className="w-4 h-4" />
+              Admin
+            </button>
+          )}
         </div>
       </div>
     </div>
