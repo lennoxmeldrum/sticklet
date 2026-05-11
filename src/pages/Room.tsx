@@ -35,11 +35,6 @@ const COLORS = [
   { id: 'purple', value: 'bg-violet-100 border-violet-200 text-slate-800', raw: 'purple' },
 ];
 
-// Canvas-expansion constants.
-const NOTE_HEIGHT_PX = 224;
-const EXTEND_BY_PX = NOTE_HEIGHT_PX * 2; // each expansion adds two note heights
-const MAX_HEIGHT_MULTIPLIER = 4;
-
 export default function Room() {
   const { roomId } = useParams<{ roomId: string }>();
   const navigate = useNavigate();
@@ -53,35 +48,10 @@ export default function Room() {
 
   const boardRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
-  const [boardHeight, setBoardHeight] = useState(0);
-  const [originalHeight, setOriginalHeight] = useState(0);
-  const [extraSlots, setExtraSlots] = useState(0);
 
-  useEffect(() => {
-    if (!boardRef.current) return;
-    const ro = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const h = entry.contentRect.height;
-        setBoardHeight(h);
-        setOriginalHeight((prev) => (prev === 0 && h > 0 ? h : prev));
-      }
-    });
-    ro.observe(boardRef.current);
-    return () => ro.disconnect();
-  }, []);
-
-  const maxSlots = originalHeight > 0
-    ? Math.floor((originalHeight * (MAX_HEIGHT_MULTIPLIER - 1)) / EXTEND_BY_PX)
-    : 0;
-  const canvasHeight = Math.max(boardHeight, originalHeight + extraSlots * EXTEND_BY_PX);
-
-  // Auto-expand when any note sits in the bottom note-height band of the canvas.
-  useEffect(() => {
-    if (!canvasHeight || extraSlots >= maxSlots) return;
-    const threshold = ((canvasHeight - NOTE_HEIGHT_PX) / canvasHeight) * 100;
-    const needsExpand = [...notes, ...draftNotes].some(n => n.y > threshold);
-    if (needsExpand) setExtraSlots(s => Math.min(s + 1, maxSlots));
-  }, [notes, draftNotes, canvasHeight, extraSlots, maxSlots]);
+  // Fixed canvas height = 3 viewports worth of vertical space below the header.
+  // The board is overflow-auto, so users scroll within it to reach further notes.
+  const CANVAS_HEIGHT_CSS = 'calc((100vh - 80px) * 3)';
 
   useEffect(() => {
     if (!roomId) return;
@@ -250,52 +220,50 @@ export default function Room() {
           ref={canvasRef}
           className={cn("relative w-full", isAddingMode ? "cursor-crosshair" : "")}
           style={{
-            height: canvasHeight ? `${canvasHeight}px` : '100%',
+            height: CANVAS_HEIGHT_CSS,
             backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)',
             backgroundSize: '24px 24px'
           }}
           onClick={handleCanvasClick}
         >
-          {canvasHeight > 0 && (
-            <AnimatePresence>
-              {notes.map(note => (
-                <StickyNote
-                  key={note.id}
-                  note={note}
-                  roomId={roomId!}
-                  canEdit={note.authorUid === user?.uid}
-                  canDelete={note.authorUid === user?.uid || isAdmin}
-                  canvasRef={canvasRef}
-                />
-              ))}
-              {draftNotes.map(draft => (
-                <StickyNote
-                  key={draft.id}
-                  note={draft}
-                  roomId={roomId!}
-                  canEdit={true}
-                  canDelete={true}
-                  isDraft={true}
-                  onSaveDraft={handleSaveDraft}
-                  onDiscardDraft={handleDiscardDraft}
-                  canvasRef={canvasRef}
-                />
-              ))}
-            </AnimatePresence>
-          )}
-
-          {isAddingMode && (
-            <div
-              className="fixed left-1/2 -translate-x-1/2 flex items-center justify-center pointer-events-none z-40"
-              style={{ top: 'calc(80px + 1rem)' }}
-            >
-              <span className="bg-indigo-900/80 text-white px-6 py-3 rounded-full font-medium backdrop-blur-sm shadow-xl flex items-center gap-3">
-                <span className="w-3 h-3 rounded-full bg-indigo-400 animate-ping"></span>
-                Click anywhere to place a note
-              </span>
-            </div>
-          )}
+          <AnimatePresence>
+            {notes.map(note => (
+              <StickyNote
+                key={note.id}
+                note={note}
+                roomId={roomId!}
+                canEdit={note.authorUid === user?.uid}
+                canDelete={note.authorUid === user?.uid || isAdmin}
+                canvasRef={canvasRef}
+              />
+            ))}
+            {draftNotes.map(draft => (
+              <StickyNote
+                key={draft.id}
+                note={draft}
+                roomId={roomId!}
+                canEdit={true}
+                canDelete={true}
+                isDraft={true}
+                onSaveDraft={handleSaveDraft}
+                onDiscardDraft={handleDiscardDraft}
+                canvasRef={canvasRef}
+              />
+            ))}
+          </AnimatePresence>
         </div>
+
+        {isAddingMode && (
+          <div
+            className="fixed left-1/2 -translate-x-1/2 flex items-center justify-center pointer-events-none z-40"
+            style={{ top: 'calc(80px + 1rem)' }}
+          >
+            <span className="bg-indigo-900/80 text-white px-6 py-3 rounded-full font-medium backdrop-blur-sm shadow-xl flex items-center gap-3">
+              <span className="w-3 h-3 rounded-full bg-indigo-400 animate-ping"></span>
+              Click anywhere to place a note
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -326,8 +294,8 @@ const StickyNote: React.FC<StickyNoteProps> = ({
   const [text, setText] = useState(note.text);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // Drag state: ref holds the latest delta (read by pointerup without closure staleness),
-  // state mirror triggers re-renders so the visual position follows the pointer.
+  // Drag: ref holds the latest delta for pointerup (no stale closures);
+  // state mirror drives re-renders so the visual position follows the pointer.
   const dragOffsetRef = useRef<{ dx: number; dy: number } | null>(null);
   const [dragOffset, setDragOffset] = useState<{ dx: number; dy: number } | null>(null);
   const [optimisticPos, setOptimisticPos] = useState<{ x: number; y: number } | null>(null);
@@ -335,7 +303,7 @@ const StickyNote: React.FC<StickyNoteProps> = ({
 
   const styleClass = COLORS.find(c => c.raw === note.color)?.value || COLORS[0].value;
 
-  // Drop optimistic override once the server-synced note catches up.
+  // Drop optimistic override once Firestore catches up.
   useEffect(() => {
     if (optimisticPos &&
         Math.abs(note.x - optimisticPos.x) < 0.01 &&
