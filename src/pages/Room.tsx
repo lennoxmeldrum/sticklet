@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { collection, doc, getDoc, onSnapshot, query, serverTimestamp, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { useAuth } from '../auth/AuthContext';
-import { Plus, ArrowLeft, Copy, Check, Trash2, Edit2 } from 'lucide-react';
+import { ArrowLeft, Copy, Check, Trash2, Edit2 } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
@@ -35,6 +35,11 @@ const COLORS = [
   { id: 'purple', value: 'bg-violet-100 border-violet-200 text-slate-800', raw: 'purple' },
 ];
 
+// Canvas-expansion constants.
+const NOTE_HEIGHT_PX = 224;
+const EXTEND_BY_PX = NOTE_HEIGHT_PX * 2; // each expansion adds two note heights
+const MAX_HEIGHT_MULTIPLIER = 4;
+
 export default function Room() {
   const { roomId } = useParams<{ roomId: string }>();
   const navigate = useNavigate();
@@ -45,6 +50,30 @@ export default function Room() {
   const [draftNotes, setDraftNotes] = useState<Note[]>([]);
   const [copied, setCopied] = useState(false);
   const [isAddingMode, setIsAddingMode] = useState(false);
+
+  const boardRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const [originalHeight, setOriginalHeight] = useState(0);
+  const [extraSlots, setExtraSlots] = useState(0);
+
+  useLayoutEffect(() => {
+    if (boardRef.current && originalHeight === 0) {
+      setOriginalHeight(boardRef.current.clientHeight);
+    }
+  }, [originalHeight]);
+
+  const maxSlots = originalHeight > 0
+    ? Math.floor((originalHeight * (MAX_HEIGHT_MULTIPLIER - 1)) / EXTEND_BY_PX)
+    : 0;
+  const canvasHeight = originalHeight + extraSlots * EXTEND_BY_PX;
+
+  // Auto-expand when any note sits in the bottom note-height band of the canvas.
+  useEffect(() => {
+    if (!canvasHeight || extraSlots >= maxSlots) return;
+    const threshold = ((canvasHeight - NOTE_HEIGHT_PX) / canvasHeight) * 100;
+    const needsExpand = [...notes, ...draftNotes].some(n => n.y > threshold);
+    if (needsExpand) setExtraSlots(s => Math.min(s + 1, maxSlots));
+  }, [notes, draftNotes, canvasHeight, extraSlots, maxSlots]);
 
   useEffect(() => {
     if (!roomId) return;
@@ -93,7 +122,7 @@ export default function Room() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleBoardClick = (e: React.MouseEvent<HTMLDivElement>) => {
+  const handleCanvasClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!isAddingMode || !roomId || !user) return;
     if (e.target !== e.currentTarget) return;
 
@@ -203,48 +232,57 @@ export default function Room() {
       </header>
 
       <div
+        ref={boardRef}
         className={cn(
           "flex-1 relative overflow-auto touch-manipulation",
-          isAddingMode ? "cursor-crosshair m-4 rounded-3xl ring-4 ring-indigo-100 ring-inset" : ""
+          isAddingMode ? "m-4 rounded-3xl ring-4 ring-indigo-100 ring-inset" : ""
         )}
-        style={{
-          backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)',
-          backgroundSize: '24px 24px'
-        }}
-        onClick={handleBoardClick}
       >
-        <AnimatePresence>
-          {notes.map(note => (
-            <StickyNote
-              key={note.id}
-              note={note}
-              roomId={roomId!}
-              canEdit={note.authorUid === user?.uid}
-              canDelete={note.authorUid === user?.uid || isAdmin}
-            />
-          ))}
-          {draftNotes.map(draft => (
-            <StickyNote
-              key={draft.id}
-              note={draft}
-              roomId={roomId!}
-              canEdit={true}
-              canDelete={true}
-              isDraft={true}
-              onSaveDraft={handleSaveDraft}
-              onDiscardDraft={handleDiscardDraft}
-            />
-          ))}
-        </AnimatePresence>
+        <div
+          ref={canvasRef}
+          className={cn("relative w-full h-full", isAddingMode ? "cursor-crosshair" : "")}
+          style={{
+            minHeight: canvasHeight ? `${canvasHeight}px` : undefined,
+            backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)',
+            backgroundSize: '24px 24px'
+          }}
+          onClick={handleCanvasClick}
+        >
+          <AnimatePresence>
+            {notes.map(note => (
+              <StickyNote
+                key={note.id}
+                note={note}
+                roomId={roomId!}
+                canEdit={note.authorUid === user?.uid}
+                canDelete={note.authorUid === user?.uid || isAdmin}
+                canvasRef={canvasRef}
+              />
+            ))}
+            {draftNotes.map(draft => (
+              <StickyNote
+                key={draft.id}
+                note={draft}
+                roomId={roomId!}
+                canEdit={true}
+                canDelete={true}
+                isDraft={true}
+                onSaveDraft={handleSaveDraft}
+                onDiscardDraft={handleDiscardDraft}
+                canvasRef={canvasRef}
+              />
+            ))}
+          </AnimatePresence>
 
-        {isAddingMode && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <span className="bg-indigo-900/80 text-white px-6 py-3 rounded-full font-medium backdrop-blur-sm shadow-xl flex items-center gap-3">
-              <span className="w-3 h-3 rounded-full bg-indigo-400 animate-ping"></span>
-              Click anywhere to place a note
-            </span>
-          </div>
-        )}
+          {isAddingMode && (
+            <div className="sticky top-1/2 -translate-y-1/2 flex items-center justify-center pointer-events-none">
+              <span className="bg-indigo-900/80 text-white px-6 py-3 rounded-full font-medium backdrop-blur-sm shadow-xl flex items-center gap-3">
+                <span className="w-3 h-3 rounded-full bg-indigo-400 animate-ping"></span>
+                Click anywhere to place a note
+              </span>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -258,6 +296,7 @@ interface StickyNoteProps {
   isDraft?: boolean;
   onSaveDraft?: (note: Note, text: string) => void;
   onDiscardDraft?: (id: string) => void;
+  canvasRef: React.RefObject<HTMLDivElement | null>;
 }
 
 const StickyNote: React.FC<StickyNoteProps> = ({
@@ -267,17 +306,82 @@ const StickyNote: React.FC<StickyNoteProps> = ({
   canDelete,
   isDraft = false,
   onSaveDraft,
-  onDiscardDraft
+  onDiscardDraft,
+  canvasRef
 }) => {
   const [isEditing, setIsEditing] = useState(isDraft);
   const [text, setText] = useState(note.text);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Drag state: dragOffset is current pointer delta in pixels.
+  // optimisticPos is the just-released position in %, kept until Firestore syncs.
+  const [dragOffset, setDragOffset] = useState<{ dx: number; dy: number } | null>(null);
+  const [optimisticPos, setOptimisticPos] = useState<{ x: number; y: number } | null>(null);
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null);
+
   const styleClass = COLORS.find(c => c.raw === note.color)?.value || COLORS[0].value;
 
-  const positionStyle: React.CSSProperties = {
-    left: `calc(${note.x}% - 120px)`,
-    top: `calc(${note.y}% - 80px)`,
+  // Drop optimistic override once the server-synced note catches up.
+  useEffect(() => {
+    if (optimisticPos &&
+        Math.abs(note.x - optimisticPos.x) < 0.01 &&
+        Math.abs(note.y - optimisticPos.y) < 0.01) {
+      setOptimisticPos(null);
+    }
+  }, [note.x, note.y, optimisticPos]);
+
+  const effective = optimisticPos ?? { x: note.x, y: note.y };
+
+  const left = dragOffset
+    ? `calc(${effective.x}% - 120px + ${dragOffset.dx}px)`
+    : `calc(${effective.x}% - 120px)`;
+  const top = dragOffset
+    ? `calc(${effective.y}% - 80px + ${dragOffset.dy}px)`
+    : `calc(${effective.y}% - 80px)`;
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (isEditing || isDraft) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('button') || target.tagName === 'TEXTAREA') return;
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragStartRef.current = { x: e.clientX, y: e.clientY };
+    setDragOffset({ dx: 0, dy: 0 });
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragStartRef.current) return;
+    setDragOffset({
+      dx: e.clientX - dragStartRef.current.x,
+      dy: e.clientY - dragStartRef.current.y,
+    });
+  };
+
+  const handlePointerUp = async (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragStartRef.current || !dragOffset) {
+      dragStartRef.current = null;
+      setDragOffset(null);
+      return;
+    }
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
+
+    const moved = Math.abs(dragOffset.dx) > 4 || Math.abs(dragOffset.dy) > 4;
+    const offset = dragOffset;
+    dragStartRef.current = null;
+    setDragOffset(null);
+
+    if (!moved || !canvasRef.current) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const newX = Math.max(0, Math.min(100, effective.x + (offset.dx / rect.width) * 100));
+    const newY = Math.max(0, Math.min(100, effective.y + (offset.dy / rect.height) * 100));
+    setOptimisticPos({ x: newX, y: newY });
+
+    try {
+      await updateDoc(doc(db, 'rooms', roomId, 'notes', note.id), { x: newX, y: newY });
+    } catch (err) {
+      console.error('Failed to move note', err);
+      setOptimisticPos(null);
+    }
   };
 
   const handleSave = async () => {
@@ -321,6 +425,9 @@ const StickyNote: React.FC<StickyNoteProps> = ({
     }
   };
 
+  const isDragging = !!dragOffset && (Math.abs(dragOffset.dx) > 4 || Math.abs(dragOffset.dy) > 4);
+  const canDrag = !isEditing && !isDraft;
+
   return (
     <motion.div
       initial={{ scale: 0, opacity: 0 }}
@@ -328,10 +435,16 @@ const StickyNote: React.FC<StickyNoteProps> = ({
       exit={{ scale: 0.8, opacity: 0 }}
       transition={{ type: "spring", stiffness: 260, damping: 20 }}
       className={cn(
-        "absolute w-[260px] min-h-[224px] p-6 shadow-lg border-t-4 flex flex-col cursor-default transform-gpu group", styleClass,
-        isDeleting ? "opacity-50 pointer-events-none" : ""
+        "absolute w-[260px] min-h-[224px] p-6 shadow-lg border-t-4 flex flex-col transform-gpu group select-none",
+        styleClass,
+        isDeleting ? "opacity-50 pointer-events-none" : "",
+        canDrag ? (isDragging ? "cursor-grabbing z-50" : "cursor-grab") : "cursor-default",
       )}
-      style={positionStyle}
+      style={{ left, top }}
+      onPointerDown={canDrag ? handlePointerDown : undefined}
+      onPointerMove={canDrag ? handlePointerMove : undefined}
+      onPointerUp={canDrag ? handlePointerUp : undefined}
+      onPointerCancel={canDrag ? handlePointerUp : undefined}
     >
       <div className="flex-1 flex flex-col">
         {isEditing ? (

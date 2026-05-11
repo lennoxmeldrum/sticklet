@@ -57,9 +57,10 @@ service cloud.firestore {
 
         allow create: if isSchoolUser() && isValidId(roomId) && isValidId(noteId) && isValidNote(incoming());
 
-        // Only the author can edit, and only text/x/y. Static fields preserved.
+        // Anyone signed-in can move a note (x/y only).
+        // The note's author can additionally edit its text.
+        // Static fields (author identity, createdAt, color) are always preserved.
         allow update: if isSchoolUser() &&
-                      existing().authorUid == request.auth.uid &&
                       incoming().authorUid == existing().authorUid &&
                       incoming().authorEmail == existing().authorEmail &&
                       incoming().authorName == existing().authorName &&
@@ -68,7 +69,11 @@ service cloud.firestore {
                       incoming().text is string && incoming().text.size() <= 1000 &&
                       incoming().x is number && incoming().x >= 0 && incoming().x <= 100 &&
                       incoming().y is number && incoming().y >= 0 && incoming().y <= 100 &&
-                      incoming().diff(existing()).affectedKeys().hasOnly(['text', 'x', 'y']);
+                      (
+                        incoming().diff(existing()).affectedKeys().hasOnly(['x', 'y']) ||
+                        (existing().authorUid == request.auth.uid &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['text', 'x', 'y']))
+                      );
 
         // Authors can delete their own notes; admin can delete any.
         allow delete: if isSchoolUser() && (existing().authorUid == request.auth.uid || isAdmin());
